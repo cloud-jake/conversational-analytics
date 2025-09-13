@@ -1,0 +1,14 @@
+# Python virtual environment
+.venv/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.pyc
+
+# Flask instance folder
+# Can contain sensitive configuration and data.
+instance/
+
+# Local configuration file
+# Contains secrets and should not be committed.
+.config

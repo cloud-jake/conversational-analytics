@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversational Analytics Demo</title>
+    <style>
+        body { font-family: 'Roboto', 'Helvetica', 'Arial', sans-serif; margin: 0; background-color: #f7f9fc; color: #3c4043; }
+        header { background-color: #4285f4; color: white; padding: 20px 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        header h1 { margin: 0; font-weight: 400; }
+        main { padding: 20px 40px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .query-form { display: flex; gap: 10px; margin-bottom: 20px; }
+        #query-input { flex-grow: 1; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 16px; }
+        #query-button { padding: 10px 20px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+        #query-button:hover { background-color: #287ae6; }
+        #query-button:disabled { background-color: #e0e0e0; cursor: not-allowed; }
+        .results-container { margin-top: 20px; }
+        #status { font-style: italic; color: #5f6368; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); background-color: white; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #e0e0e0; }
+        thead tr { background-color: #f1f3f4; }
+        th { font-weight: 500; }
+        tbody tr:hover { background-color: #f7f9fc; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Conversational Analytics Demo</h1>
+    </header>
+
+    <main class="container">
+        <h2>Query Conversations</h2>
+        <p>Enter a keyword or phrase to search for in conversation transcripts.</p>
+        <div class="query-form">
+            <input type="text" id="query-input" placeholder="e.g., 'cancel my account'">
+            <button id="query-button">Query</button>
+        </div>
+
+        <div class="results-container">
+            <p id="status">Enter a query to see results.</p>
+            <table id="results-table" style="display:none;">
+                <thead id="results-header"></thead>
+                <tbody id="results-body"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <script>
+        const queryInput = document.getElementById('query-input');
+        const queryButton = document.getElementById('query-button');
+        const statusEl = document.getElementById('status');
+        const resultsTable = document.getElementById('results-table');
+        const resultsHeader = document.getElementById('results-header');
+        const resultsBody = document.getElementById('results-body');
+
+        queryButton.addEventListener('click', performQuery);
+        queryInput.addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                performQuery();
+            }
+        });
+
+        async function performQuery() {
+            const query = queryInput.value.trim();
+            if (!query) {
+                statusEl.textContent = 'Please enter a query.';
+                return;
+            }
+
+            // UI updates for loading state
+            queryButton.disabled = true;
+            statusEl.textContent = 'Querying...';
+            resultsTable.style.display = 'none';
+            resultsBody.innerHTML = '';
+            resultsHeader.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+
+                const results = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(results.error || 'An unknown error occurred.');
+                }
+
+                if (results.length === 0) {
+                    statusEl.textContent = `No results found for "${query}".`;
+                    return;
+                }
+
+                // Populate table
+                statusEl.textContent = `Showing ${results.length} results for "${query}".`;
+                const headers = Object.keys(results[0]);
+                resultsHeader.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+
+                results.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = headers.map(h => `<td>${row[h]}</td>`).join('');
+                    resultsBody.appendChild(tr);
+                });
+                resultsTable.style.display = 'table';
+
+            } catch (error) {
+                statusEl.textContent = `Error: ${error.message}`;
+                console.error('Query failed:', error);
+            } finally {
+                queryButton.disabled = false;
+            }
+        }
+    </script>
+
+</body>
+</html>
