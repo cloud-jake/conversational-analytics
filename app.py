@@ -1,5 +1,6 @@
 import os
 from flask import Flask, render_template, request, jsonify
+import logging
 from google.cloud import geminidataanalytics
 from dotenv import load_dotenv
 
@@ -17,15 +18,15 @@ try:
         raise ValueError("PROJECT_ID not found in .config file.")
     data_chat_client = geminidataanalytics.DataChatServiceClient()
 except Exception as e:
-    print(f"Error initializing DataChatServiceClient: {e}")
-    data_chat_client = None
+    logging.critical(f"Fatal: Could not initialize DataChatServiceClient: {e}")
+    data_chat_client = None # The app will not be able to serve queries.
 
 # Load and parse the list of available BigQuery tables from the config
 AVAILABLE_TABLES = [
     table.strip() for table in os.environ.get("BIGQUERY_TABLES", "").split(',') if table.strip()
 ]
 if not AVAILABLE_TABLES:
-    print("Warning: BIGQUERY_TABLES not found or empty in .config file.")
+    app.logger.warning("BIGQUERY_TABLES not found or empty in .config file.")
 
 @app.route('/')
 def index():
@@ -44,6 +45,8 @@ def handle_query():
 
     user_query = data['query']
     table_id = data['table_id']
+
+    app.logger.info(f"Received query for table '{table_id}': '{user_query}'")
 
     # Security: Validate that the requested table is in our allowed list
     if table_id not in AVAILABLE_TABLES:
@@ -77,35 +80,59 @@ def handle_query():
             inline_context=inline_context,
         )
 
+        app.logger.info("Sending request to Conversational Analytics API...")
         # 4. Call the API and process the streaming response
         stream = data_chat_client.chat(request=request_obj)
 
+        app.logger.info("Processing streaming response from API...")
         generated_sql = ""
         results = []
         text_response = ""
 
         for reply in stream:
-            if "generated_sql" in reply.system_message:
-                generated_sql = reply.system_message.generated_sql
-            if "text" in reply.system_message:
-                text_response += "".join(reply.system_message.text.parts)
-            if "data" in reply.system_message and "result" in reply.system_message.data:
-                # The data comes in a structured format, convert it to a list of dicts
-                fields = [field.name for field in reply.system_message.data.result.schema.fields]
-                for row_data in reply.system_message.data.result.data:
-                    results.append({field: row_data[field] for field in fields})
+            system_msg = reply.system_message
 
+            if "text" in system_msg:
+                text_part = "".join(system_msg.text.parts)
+                app.logger.info("API step: Received text response part.")
+                app.logger.debug(f"Text content: '{text_part}'")
+                text_response += text_part
+            elif "data" in system_msg:
+                data_msg = system_msg.data
+                if "generated_sql" in data_msg:
+                    generated_sql = data_msg.generated_sql
+                    app.logger.info("API step: Received generated SQL.")
+                    app.logger.debug(f"\n--- Generated SQL ---\n{generated_sql}\n---------------------")
+                elif "result" in data_msg:
+                    app.logger.info("API step: Receiving data results.")
+                    fields = [field.name for field in data_msg.result.schema.fields]
+                    app.logger.debug(f"Result fields: {fields}")
+                    for row_data in data_msg.result.data:
+                        results.append({field: row_data[field] for field in fields})
+            elif "schema" in system_msg:
+                app.logger.info("API step: Received schema information (not handled by UI).")
+                app.logger.debug(f"Schema message: {system_msg.schema}")
+            elif "chart" in system_msg:
+                app.logger.info("API step: Received chart data (not handled by UI).")
+                app.logger.debug(f"Chart message: {system_msg.chart}")
+            else:
+                app.logger.warning(f"API step: Received unhandled message type: {system_msg}")
+
+        app.logger.info("Finished processing API stream.")
         return jsonify({
             "results": results,
             "generated_sql": generated_sql,
             "text_response": text_response
         })
     except Exception as e:
+        # Log the full exception traceback to the console for debugging.
+        app.logger.exception(f"An error occurred during the API call for query: '{user_query}'")
         return jsonify({"error": f"An error occurred with the Conversational Analytics API: {str(e)}"}), 500
 
 @app.route('/api/tables', methods=['GET'])
 def get_tables():
     """Returns the list of available tables to query."""
+    app.logger.debug(f"Serving table list: {AVAILABLE_TABLES}")
     return jsonify(AVAILABLE_TABLES)
 
 
