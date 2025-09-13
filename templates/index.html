@@ -17,6 +17,10 @@
         #query-button:disabled { background-color: #e0e0e0; cursor: not-allowed; }
         .results-container { margin-top: 20px; }
         #status { font-style: italic; color: #5f6368; }
+        .response-section { margin-top: 20px; padding: 15px; background-color: #e8f0fe; border-left: 4px solid #4285f4; border-radius: 4px; }
+        .response-section h3 { margin-top: 0; }
+        .response-section pre { background-color: #f1f3f4; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; }
+
         table { width: 100%; border-collapse: collapse; margin-top: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); background-color: white; }
         th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #e0e0e0; }
         thead tr { background-color: #f1f3f4; }
@@ -32,14 +36,19 @@
 
     <main class="container">
         <h2>Query Conversations</h2>
-        <p>Enter a keyword or phrase to search for in conversation transcripts.</p>
+        <p>Select a BigQuery table and ask a question in natural language.</p>
         <div class="query-form">
-            <input type="text" id="query-input" placeholder="e.g., 'cancel my account'">
+            <select id="table-select" style="padding: 10px; border-radius: 4px; border: 1px solid #dadce0;"></select>
+        </div>
+        <div class="query-form">
+            <input type="text" id="query-input" placeholder="e.g., 'what are the top 10 terms for the last week available?'">
             <button id="query-button">Query</button>
         </div>
 
         <div class="results-container">
             <p id="status">Enter a query to see results.</p>
+            <div id="text-response-section" class="response-section" style="display:none;"></div>
+            <div id="sql-section" class="response-section" style="display:none;"></div>
             <table id="results-table" style="display:none;">
                 <thead id="results-header"></thead>
                 <tbody id="results-body"></tbody>
@@ -50,7 +59,10 @@
     <script>
         const queryInput = document.getElementById('query-input');
         const queryButton = document.getElementById('query-button');
+        const tableSelect = document.getElementById('table-select');
         const statusEl = document.getElementById('status');
+        const textResponseSection = document.getElementById('text-response-section');
+        const sqlSection = document.getElementById('sql-section');
         const resultsTable = document.getElementById('results-table');
         const resultsHeader = document.getElementById('results-header');
         const resultsBody = document.getElementById('results-body');
@@ -62,6 +74,26 @@
             }
         });
 
+        // On page load, fetch the available tables and populate the dropdown
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const response = await fetch('/api/tables');
+                const tables = await response.json();
+                if (!response.ok) throw new Error(tables.error || 'Failed to load tables.');
+
+                if (tables.length > 0) {
+                    tables.forEach(tableId => {
+                        const option = new Option(tableId, tableId);
+                        tableSelect.add(option);
+                    });
+                } else {
+                    statusEl.textContent = 'Error: No queryable tables configured on the server.';
+                }
+            } catch (error) {
+                statusEl.textContent = `Error: ${error.message}`;
+            }
+        });
+
         async function performQuery() {
             const query = queryInput.value.trim();
             if (!query) {
@@ -69,9 +101,17 @@
                 return;
             }
 
+            const tableId = tableSelect.value;
+            if (!tableId) {
+                statusEl.textContent = 'Please select a table to query.';
+                return;
+            }
+
             // UI updates for loading state
             queryButton.disabled = true;
             statusEl.textContent = 'Querying...';
+            textResponseSection.style.display = 'none';
+            sqlSection.style.display = 'none';
             resultsTable.style.display = 'none';
             resultsBody.innerHTML = '';
             resultsHeader.innerHTML = '';
@@ -80,15 +120,28 @@
                 const response = await fetch('/api/query', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: query })
+                    body: JSON.stringify({ query: query, table_id: tableId })
                 });
 
-                const results = await response.json();
+                const data = await response.json();
 
                 if (!response.ok) {
-                    throw new Error(results.error || 'An unknown error occurred.');
+                    throw new Error(data.error || 'An unknown error occurred.');
                 }
 
+                // Display text response from the agent
+                if (data.text_response) {
+                    textResponseSection.innerHTML = `<h3>Agent Response</h3><p>${data.text_response}</p>`;
+                    textResponseSection.style.display = 'block';
+                }
+
+                // Display the SQL generated by the agent
+                if (data.generated_sql) {
+                    sqlSection.innerHTML = `<h3>Generated SQL</h3><pre><code>${data.generated_sql}</code></pre>`;
+                    sqlSection.style.display = 'block';
+                }
+
+                const results = data.results || [];
                 if (results.length === 0) {
                     statusEl.textContent = `No results found for "${query}".`;
                     return;
@@ -96,15 +149,16 @@
 
                 // Populate table
                 statusEl.textContent = `Showing ${results.length} results for "${query}".`;
-                const headers = Object.keys(results[0]);
-                resultsHeader.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
-
-                results.forEach(row => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = headers.map(h => `<td>${row[h]}</td>`).join('');
-                    resultsBody.appendChild(tr);
-                });
-                resultsTable.style.display = 'table';
+                if (results.length > 0) {
+                    const headers = Object.keys(results[0]);
+                    resultsHeader.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+                    results.forEach(row => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = headers.map(h => `<td>${row[h]}</td>`).join('');
+                        resultsBody.appendChild(tr);
+                    });
+                    resultsTable.style.display = 'table';
+                }
 
             } catch (error) {
                 statusEl.textContent = `Error: ${error.message}`;
